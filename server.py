@@ -1,59 +1,158 @@
 #!/usr/bin/env python3
 """
-DolladAI — Web Server
-Flask-based web interface for the AI agent.
-Listens on port 3000.
+DolladAI — Web Server v2.0
+Flask-based web interface with file upload, voice, and enhanced search.
 """
 
 import os
 import sys
 import json
+import base64
 import threading
+import mimetypes
+import tempfile
+from pathlib import Path
 from flask import Flask, render_template, request, jsonify, Response
 from flask_cors import CORS
 
-# Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 from agent_core import AIAgent
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50MB max upload
 CORS(app)
 
-# Global agent instance (one per server, shared across requests)
-# Each session gets its own via session_id in production; for simplicity use one global
 _agent_lock = threading.Lock()
-_agents: dict = {}  # session_id → AIAgent
+_agents: dict = {}
+
+UPLOAD_DIR = os.path.expanduser("~/.ai_agent/uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 def get_agent(session_id: str = "default", model: str = "default") -> AIAgent:
-    """Get or create an agent for a session."""
     with _agent_lock:
         if session_id not in _agents:
             _agents[session_id] = AIAgent(model=model)
         return _agents[session_id]
 
 
+def extract_file_content(filepath: str, filename: str, mimetype: str) -> str:
+    """Extract text content from uploaded files."""
+    ext = Path(filename).suffix.lower()
+    content_parts = []
+
+    try:
+        # PDF
+        if ext == ".pdf" or "pdf" in mimetype:
+            try:
+                import PyPDF2
+                with open(filepath, "rb") as f:
+                    reader = PyPDF2.PdfReader(f)
+                    text = ""
+                    for page in reader.pages[:20]:  # max 20 pages
+                        text += page.extract_text() or ""
+                content_parts.append(f"[PDF Content — {len(reader.pages)} pages]\n{text[:8000]}")
+            except Exception as e:
+                content_parts.append(f"[PDF — could not extract text: {e}]")
+
+        # Word documents
+        elif ext in (".docx", ".doc"):
+            try:
+                from docx import Document
+                doc = Document(filepath)
+                text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+                content_parts.append(f"[Word Document]\n{text[:8000]}")
+            except Exception as e:
+                content_parts.append(f"[Word doc — could not extract: {e}]")
+
+        # Excel / CSV
+        elif ext in (".xlsx", ".xls"):
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
+                rows = []
+                for sheet in wb.sheetnames[:3]:
+                    ws = wb[sheet]
+                    rows.append(f"Sheet: {sheet}")
+                    for row in list(ws.iter_rows(values_only=True))[:50]:
+                        rows.append("\t".join(str(c) if c is not None else "" for c in row))
+                content_parts.append(f"[Excel Spreadsheet]\n" + "\n".join(rows)[:6000])
+            except Exception as e:
+                content_parts.append(f"[Excel — could not extract: {e}]")
+
+        elif ext == ".csv":
+            with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read(6000)
+            content_parts.append(f"[CSV Data]\n{text}")
+
+        # Images
+        elif ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp") or "image" in mimetype:
+            try:
+                from PIL import Image
+                img = Image.open(filepath)
+                w, h = img.size
+                mode = img.mode
+                content_parts.append(
+                    f"[Image: {filename}]\n"
+                    f"Size: {w}×{h}px | Mode: {mode} | Format: {img.format}\n"
+                    f"(Image uploaded — describe or analyze this image)"
+                )
+                # Also encode as base64 for vision models
+                with open(filepath, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode()
+                content_parts.append(f"[IMAGE_BASE64:{b64[:100]}...]")  # truncated for context
+            except Exception as e:
+                content_parts.append(f"[Image: {filename} — {e}]")
+
+        # Audio
+        elif ext in (".mp3", ".wav", ".ogg", ".m4a", ".webm") or "audio" in mimetype:
+            size_kb = os.path.getsize(filepath) // 1024
+            content_parts.append(f"[Audio file: {filename}, {size_kb}KB — transcription not available in this mode]")
+
+        # Plain text / code
+        elif ext in (".txt", ".md", ".py", ".js", ".ts", ".html", ".css", ".json",
+                     ".yaml", ".yml", ".xml", ".sh", ".sql", ".rs", ".go", ".java",
+                     ".cpp", ".c", ".h", ".rb", ".php", ".swift", ".kt") or "text" in mimetype:
+            with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read(10000)
+            content_parts.append(f"[{ext.upper()} File: {filename}]\n{text}")
+
+        else:
+            size_kb = os.path.getsize(filepath) // 1024
+            content_parts.append(f"[File: {filename}, {size_kb}KB, type: {mimetype}]")
+
+    except Exception as e:
+        content_parts.append(f"[Error reading {filename}: {e}]")
+
+    return "\n\n".join(content_parts)
+
+
 @app.route("/")
 def index():
-    """Serve the main chat UI."""
     return render_template("index.html")
 
 
 @app.route("/api/chat", methods=["POST"])
 def chat():
-    """Handle a chat message."""
     data = request.get_json(force=True, silent=True) or {}
     message = (data.get("message") or "").strip()
     model = data.get("model", "default")
     session_id = data.get("session_id", "default")
+    file_contexts = data.get("file_contexts", [])  # pre-extracted file content
 
-    if not message:
+    if not message and not file_contexts:
         return jsonify({"error": "Empty message"}), 400
+
+    # Build full message with file context
+    full_message = message
+    if file_contexts:
+        ctx_parts = []
+        for fc in file_contexts:
+            ctx_parts.append(f"--- Uploaded File: {fc.get('name', 'file')} ---\n{fc.get('content', '')}")
+        full_message = "\n\n".join(ctx_parts) + "\n\n" + (message or "Analyze the uploaded file(s) above.")
 
     agent = get_agent(session_id, model)
 
-    # Track tool usage for the UI
     original_execute = agent._execute_tool
     tools_used = []
 
@@ -64,96 +163,140 @@ def chat():
     agent._execute_tool = tracked_execute
 
     try:
-        response = agent.chat(message)
+        response = agent.chat(full_message)
     except Exception as e:
         response = f"❌ Agent error: {str(e)}"
     finally:
         agent._execute_tool = original_execute
 
-    # Handle exit command
     if response == "__EXIT__":
         response = "👋 Goodbye! Your data is saved. Refresh to start a new session."
 
     return jsonify({
         "response": response,
-        "tools_used": list(dict.fromkeys(tools_used)),  # deduplicated, ordered
+        "tools_used": list(dict.fromkeys(tools_used)),
         "model": agent.llm.model,
     })
 
 
+@app.route("/api/upload", methods=["POST"])
+def upload_file():
+    """Handle file uploads — extract content and return it."""
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+
+    file = request.files["file"]
+    if not file.filename:
+        return jsonify({"error": "Empty filename"}), 400
+
+    filename = file.filename
+    mimetype = file.mimetype or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+
+    # Save to temp location
+    ext = Path(filename).suffix.lower()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext, dir=UPLOAD_DIR) as tmp:
+        file.save(tmp.name)
+        tmp_path = tmp.name
+
+    try:
+        content = extract_file_content(tmp_path, filename, mimetype)
+        size_kb = os.path.getsize(tmp_path) // 1024
+
+        # For images, also return base64 preview
+        preview_b64 = None
+        if "image" in mimetype or ext in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
+            try:
+                with open(tmp_path, "rb") as f:
+                    preview_b64 = f"data:{mimetype};base64," + base64.b64encode(f.read()).decode()
+            except Exception:
+                pass
+
+        return jsonify({
+            "success": True,
+            "filename": filename,
+            "mimetype": mimetype,
+            "size_kb": size_kb,
+            "content": content,
+            "preview": preview_b64,
+        })
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+@app.route("/api/search", methods=["POST"])
+def web_search():
+    """Direct web search endpoint."""
+    data = request.get_json(force=True, silent=True) or {}
+    query = (data.get("query") or "").strip()
+    search_type = data.get("type", "search")  # search | wikipedia | news
+    session_id = data.get("session_id", "default")
+
+    if not query:
+        return jsonify({"error": "Empty query"}), 400
+
+    agent = get_agent(session_id)
+    result = agent.tools["web_search"].run(action=search_type, query=query, max_results=8)
+    return jsonify(result)
+
+
 @app.route("/api/model", methods=["POST"])
 def switch_model():
-    """Switch the LLM model for a session."""
     data = request.get_json(force=True, silent=True) or {}
     model = data.get("model", "default")
     session_id = data.get("session_id", "default")
-
     agent = get_agent(session_id)
     agent.llm.switch_model(model)
-
     return jsonify({"success": True, "model": agent.llm.model})
 
 
 @app.route("/api/clear", methods=["POST"])
 def clear_history():
-    """Clear conversation history for a session."""
     data = request.get_json(force=True, silent=True) or {}
     session_id = data.get("session_id", "default")
-
     agent = get_agent(session_id)
     agent.memory.clear()
     agent._init_system_message()
-
     return jsonify({"success": True, "message": "History cleared"})
 
 
 @app.route("/api/status", methods=["GET"])
 def status():
-    """Health check endpoint."""
-    return jsonify({
-        "status": "ok",
-        "name": "DolladAI",
-        "version": "1.0.0",
-        "sessions": len(_agents),
-    })
+    return jsonify({"status": "ok", "name": "DolladAI", "version": "2.0.0", "sessions": len(_agents)})
 
 
 @app.route("/api/tasks", methods=["GET"])
 def get_tasks():
-    """Get all tasks."""
     session_id = request.args.get("session_id", "default")
     agent = get_agent(session_id)
-    result = agent.tools["task_manager"].run(action="list")
-    return jsonify(result)
+    return jsonify(agent.tools["task_manager"].run(action="list"))
 
 
 @app.route("/api/notes", methods=["GET"])
 def get_notes():
-    """Get all notes."""
     session_id = request.args.get("session_id", "default")
     agent = get_agent(session_id)
-    result = agent.tools["note_manager"].run(action="list")
-    return jsonify(result)
+    return jsonify(agent.tools["note_manager"].run(action="list"))
 
 
 @app.route("/api/calendar", methods=["GET"])
 def get_calendar():
-    """Get today's events."""
     session_id = request.args.get("session_id", "default")
     agent = get_agent(session_id)
-    result = agent.tools["calendar"].run(action="today")
-    return jsonify(result)
+    return jsonify(agent.tools["calendar"].run(action="today"))
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 3000))
     print(f"""
 ╔══════════════════════════════════════════════════════╗
-║         🤖  DolladAI  —  Starting Web Server         ║
+║       🤖  DolladAI v2.0  —  Starting Web Server      ║
 ╠══════════════════════════════════════════════════════╣
 ║  URL:    http://0.0.0.0:{port:<28}║
-║  Model:  Blackbox Pro (default)                      ║
-║  Press Ctrl+C to stop                                ║
+║  Upload: 50MB max (PDF, DOCX, images, code, CSV...)  ║
+║  Voice:  Web Speech API (browser-native)             ║
 ╚══════════════════════════════════════════════════════╝
 """)
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
