@@ -6,7 +6,7 @@ import json
 import re
 from typing import Dict, Any, List, Optional
 
-from llm_client import BlackboxLLMClient
+from llm_client import UniversalLLMClient as BlackboxLLMClient
 from memory.memory_manager import ConversationMemory, LongTermMemory
 from tools.file_tool import FileTool
 from tools.web_tool import WebTool
