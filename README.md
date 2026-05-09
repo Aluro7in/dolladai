@@ -1,6 +1,10 @@
-# 🤖 AI Personal Agent — Powered by Blackbox AI
+# 🤖 DolladAI — Your Personal AI Agent
 
-A fully-featured AI agent written in Python that manages **everything** using the Blackbox AI API.
+A fully-featured AI agent with a beautiful web UI, powered by the [Blackbox AI API](https://blackbox.ai). Manages your files, tasks, calendar, notes, runs code, searches the web, and remembers everything.
+
+![DolladAI](https://img.shields.io/badge/DolladAI-v1.0.0-7c3aed?style=for-the-badge)
+![Python](https://img.shields.io/badge/Python-3.9+-3776ab?style=for-the-badge&logo=python)
+![Flask](https://img.shields.io/badge/Flask-3.0-000000?style=for-the-badge&logo=flask)
 
 ---
 
@@ -14,91 +18,63 @@ A fully-featured AI agent written in Python that manages **everything** using th
 | ✅ **Task Manager** | Persistent to-do list with priorities, due dates, tags |
 | 📅 **Calendar** | Schedule events, reminders, view upcoming events |
 | 📝 **Notes** | Create, search, and manage personal notes |
-| 🔍 **Web Search** | DuckDuckGo + Wikipedia search (no API key needed) |
-| 💻 **System Monitor** | CPU, memory, disk, processes, environment variables |
+| 🔍 **Web Search** | DuckDuckGo + Wikipedia search (no extra API key needed) |
+| 🖥️ **System Monitor** | CPU, memory, disk, processes, environment variables |
 | 🧠 **Memory** | Persistent conversation history + long-term memory |
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Install dependencies
+### 1. Clone the repo
+```bash
+git clone https://github.com/Aluro7in/dolladai.git
+cd dolladai
+```
+
+### 2. Set up your API key
+```bash
+cp .env.example .env
+# Edit .env and add your Blackbox AI API key:
+# BLACKBOX_API_KEY=your_key_here
+```
+Get your API key at → **https://blackbox.ai**
+
+### 3. Install dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Run the agent
+### 4. Run the web server
 ```bash
-# Interactive mode (recommended)
-python agent.py
-
-# Single query mode
-python agent.py -q "What files are in my home directory?"
-
-# Use a specific model
-python agent.py --model gpt4
-python agent.py --model claude
-python agent.py --model gemini
-python agent.py --model deepseek
-
-# Verbose mode (shows tool calls)
-python agent.py --verbose
+python server.py
 ```
+Open **http://localhost:3000** in your browser 🎉
 
 ---
 
-## 💬 Usage Examples
+## 🖥️ Web UI
 
-### File Management
-```
-You › Read the file /etc/hostname
-You › List all Python files in /home/user/projects
-You › Create a file called notes.txt with "Hello World"
-You › Search for files containing "TODO" in /home/user
-```
+The web interface runs on port 3000 and features:
+- 💬 Real-time chat with markdown rendering
+- 🔄 Model switcher (Blackbox Pro, Claude, Gemini, GPT-5, Kimi K2, Grok)
+- 📋 Sidebar with capability shortcuts & quick actions
+- ⚙️ Tool usage indicators
+- 🧠 Persistent memory across sessions
 
-### Task Management
-```
-You › Add a task: Buy groceries, high priority, due tomorrow
-You › Show all my pending tasks
-You › Mark task #3 as complete
-You › What tasks are due this week?
-```
+---
 
-### Calendar
-```
-You › Schedule a meeting tomorrow at 2pm for 1 hour
-You › What events do I have today?
-You › Show upcoming events for the next 7 days
-```
+## 💬 Example Prompts
 
-### Notes
 ```
-You › Create a note titled "Ideas" with content "Build an AI agent"
-You › Search my notes for "project"
-You › Show all my notes
-```
-
-### Web Search
-```
-You › Search for the latest Python news
-You › What is quantum computing? (Wikipedia)
-You › Find news about AI developments
-```
-
-### Code Execution
-```
-You › Run this Python code: print(sum(range(100)))
-You › Install the numpy package
-You › Run the shell command: ls -la
-```
-
-### System Info
-```
-You › Show my system overview
-You › How much memory am I using?
-You › What processes are running?
-You › Show disk usage
+Add a task: Review project proposal, high priority, due tomorrow
+Search Wikipedia for quantum computing
+Show my system info: CPU, memory, disk usage
+Write and run Python code to generate a random password
+Create a note titled "Ideas" with content: Build something amazing
+Schedule a meeting tomorrow at 3pm for 1 hour
+List all files in the current directory
+/help
 ```
 
 ---
@@ -116,18 +92,21 @@ You › Show disk usage
 | `/calendar` | Today's events |
 | `/model <name>` | Switch LLM model |
 | `/clear` | Clear conversation history |
-| `/history` | Show conversation stats |
-| `/exit` | Exit the agent |
 
 ---
 
 ## 📁 Project Structure
 
 ```
-├── agent.py              # Main entry point (CLI)
+├── server.py             # Flask web server (port 3000)
+├── agent.py              # CLI entry point
 ├── agent_core.py         # Agent orchestrator (LLM + tools + memory)
 ├── llm_client.py         # Blackbox AI API client
 ├── requirements.txt      # Python dependencies
+├── .env.example          # Environment variable template
+├── start.sh              # One-command startup script
+├── templates/
+│   └── index.html        # Web UI (dark theme chat interface)
 ├── tools/
 │   ├── file_tool.py      # File system operations
 │   ├── web_tool.py       # Web fetching & downloading
@@ -143,34 +122,30 @@ You › Show disk usage
 
 ---
 
+## 🔑 Available Models
+
+| Key | Model |
+|---|---|
+| `default` | Blackbox Pro (fast, capable) |
+| `claude` | Claude Sonnet 4.6 |
+| `gemini` | Gemini 3.1 Pro |
+| `gpt4` | GPT-5.3 Codex |
+| `deepseek` | Kimi K2.6 |
+| `grok` | Grok Code Fast |
+
+---
+
 ## 💾 Data Storage
 
-All persistent data is stored in `~/.ai_agent/`:
+All persistent data is stored locally in `~/.ai_agent/`:
 - `tasks.json` — your task list
 - `calendar.json` — your calendar events
 - `notes.json` — your notes
 - `long_term_memory.json` — remembered facts
-- `preferences.json` — user preferences
 - `conversation_history.json` — chat history
-- `.history` — readline input history
 
 ---
 
-## 🔑 API Configuration
+## 📄 License
 
-The agent uses the Blackbox AI API. The API key is pre-configured.
-
-Available models:
-- `default` — blackboxai (fast, capable)
-- `gpt4` — GPT-4o
-- `claude` — Claude Sonnet
-- `gemini` — Gemini 2.0 Flash
-- `deepseek` — DeepSeek V3
-
----
-
-## 🔒 Security Notes
-
-- Code execution runs in subprocesses for isolation
-- Environment variable display filters out secrets/passwords/tokens
-- All data is stored locally in your home directory
+MIT License — feel free to use, modify, and distribute.
